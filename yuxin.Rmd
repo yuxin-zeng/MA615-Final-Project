@@ -1,0 +1,403 @@
+---
+title: "MA615 Final Project"
+author: "Yuxin Zeng"
+date: "2020/12/10"
+output: 
+  html_document: 
+    toc: yes
+    toc_float: yes
+    theme: cerulean
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load("rJava")
+library(tidyverse)
+library(rvest)
+library(ggplot2)
+library(Rwordseg)
+library(tm)
+library(wordcloud2)
+library(SentimentAnalysis)
+library(tidytext)
+library(purrr)
+```
+
+# Introduction
+IMDb (Internet Movie Database) is a website owned by Amazon, an online database of movies and TV shows. On the IMDb website, you can query numerous information about movies and TV shows, including actors, lengths, descriptions, ratings, and comments. IMDb rating is currently the most widely used movies rating.
+
+![Figure1: IMDb Website](C:/Users/lenovo/Desktop/615 R/AssignmentsProjects/final/png/Website.png)
+
+I crawled the rank, titles, broadcast time, descriptions, lengths of each episode, genres, ratings, number of people rated, and main actors of top 50 comedy TV shows on IMDb. After integrating above information into a data set, I did a simple EDA. Then I performed text analysis (word cloud and sentiment analysis) of the description. Finally, I analyzed and visualized the ratings of each episode of "Young Shelton".
+
+# Data Collection and Processing
+SelectorGadget is an extension of Google Chrome that can get CSS selector target elements, which helps us quickly find the node information of html. 
+![Figure2: IMDb Website](C:/Users/lenovo/Desktop/615 R/AssignmentsProjects/final/png/SelectorGadget.png)
+
+Read the web page first.
+```{r}
+url <- "https://www.imdb.com/search/title/?genres=comedy&title_type=tv_series,mini_series&explore=genres&pf_rd_m=A2FGELUUNOQJNL&pf_rd_p=b4e1d6fb-9821-4c7d-ad14-31ed10854442&pf_rd_r=K8CC77GSYT0GKXYG31YW&pf_rd_s=center-7&pf_rd_t=15051&pf_rd_i=genre&ref_=ft_gnr_tvpop_5"
+webpage <- read_html(url)
+```
+
+The rank of the top 50 comedy TV shows.
+```{r}
+rank_data_html <- html_nodes(webpage,'.text-primary')
+rank_data <- html_text(rank_data_html)
+
+rank_data <- as.numeric(rank_data)
+```
+
+The titles of the top 50 comedy TV shows.
+```{r}
+title_data_html <- html_nodes(webpage,'.lister-item-header a')
+title_data <- html_text(title_data_html)
+```
+
+Broadcast time of the top 50 comedy TV shows.
+```{r}
+span_data_html <- html_nodes(webpage,'.unbold')
+span_data <- html_text(span_data_html)
+
+#Remove "i" and "()" in the span 
+span_data <- data.frame(span_data)
+span_data <- span_data[seq(0,nrow(span_data),2),]
+
+span_data <- gsub("[(.*)]","",span_data)
+```
+
+Descriptions of the top 50 comedy TV shows.
+```{r}
+description_data_html <- html_nodes(webpage,'.ratings-bar+ .text-muted')
+description_data <- html_text(description_data_html)
+
+#remove "\n" in the front of the description
+description_data <- gsub("\n","",description_data)
+```
+
+Episode lengths of the top 50 comedy TV shows.
+```{r,warning=FALSE}
+runtime_data_html <- html_nodes(webpage,'.text-muted .runtime')
+runtime_data <- html_text(runtime_data_html)
+
+#Remove the unit “min” and convert it into numeric variable
+runtime_data <- gsub("min","",runtime_data)
+runtime_data <- as.numeric(runtime_data)
+
+#Fill 1,7,24 with NA
+for (i in c(6,23)){
+  a <- runtime_data[1:(i-1)] 
+  b <- runtime_data[i:length(runtime_data)]
+  runtime_data <- append(a,list("NA"))
+  runtime_data <- append(runtime_data,b)
+}
+runtime_data <- as.numeric(runtime_data)
+runtime_data <- rbind(NA,data.frame(runtime_data))
+```
+
+Genres of the top 50 comedy TV shows.
+```{r}
+genre_data_html <- html_nodes(webpage,'.genre')
+genre_data <- html_text(genre_data_html)
+
+#Remove “\n” and blank in the front of genre
+genre_data <- gsub("\n","",genre_data)
+genre_data <- gsub(" ","",genre_data)
+
+#Only keep the first category of genre for each show
+genre_data <- gsub(",.*","",genre_data)
+
+genre_data <- as.factor(genre_data)
+```
+
+Ratings of the top 50 comedy TV shows.
+```{r}
+rating_data_html <- html_nodes(webpage,'.ratings-imdb-rating strong')
+rating_data <- html_text(rating_data_html)
+
+rating_data <- as.numeric(rating_data)
+```
+
+Number of people that rated the shows.
+```{r}
+votes_data_html <- html_nodes(webpage,'.sort-num_votes-visible span:nth-child(2)')
+votes_data <- html_text(votes_data_html)
+
+# Remove “,” and convert it into numeric variable
+votes_data <- gsub(",", "", votes_data)
+votes_data <- as.numeric(votes_data)
+```
+
+Main actors of the top 50 comedy TV shows.
+```{r}
+stars_data_html <- html_nodes(webpage,'.text-muted+ p a:nth-child(1)')
+stars_data <- html_text(stars_data_html)
+```
+
+In the above process, after collecting the data of a variable, it is cleaned then. Remove unnecessary information and symbols, deal with missing values, and change variable types. Finally integrate the data. 
+```{r}
+data.frame(
+  Rank = rank_data, 
+  Title = title_data,
+  Span = span_data,
+  Description = description_data, 
+  Runtime = runtime_data,
+  Genre = genre_data, 
+  Rating = rating_data,
+  Votes = votes_data,                           
+  Star = stars_data
+) %>% 
+  rename(Runtime=runtime_data) -> 
+  dt
+save(dt,file="C:/Users/lenovo/Desktop/615 R/AssignmentsProjects/final/app/dt.Rdata")
+```
+
+# Initial EDA
+```{r}
+qplot(data=dt,x=Rating,fill=Genre,bins=30) +
+  labs(title="Ratings of Top 50 Comedy TV Shows",
+       y="Count") -> EDA1
+ggsave(EDA1,filename ="C:/Users/lenovo/Desktop/615 R/AssignmentsProjects/final/output/EDA1.png")
+```
+
+Most of the ratings are between 6.5 and 9. And there are many shows that rated between 8 and 9. Overall, the ratings of top 50 comedy TV shows are pretty good. (After all, their popularity rank in the top 50.) There may be multiple genres for one show, and I only kept the first one, so most of the genres in the plot are comedies. 
+
+```{r}
+ggplot(dt,aes(x=Rank,y=Rating)) +
+  geom_point(aes(size=Votes,color=Runtime)) +
+  labs(title="Ratings of Top 50 Comedy TV Shows",
+       x="Rank") -> EDA2
+ggsave(EDA2,filename ="C:/Users/lenovo/Desktop/615 R/AssignmentsProjects/final/output/EDA2.png")
+```
+
+This plot uses the color of the dots to indicate the lengths of each episode, and the size to indicate the number of people participating in the rating. The ninth most popular show has a large number of votes, and the rating is also very high. I queried in the data set and found it is "Friends", which is my favorite show too.
+
+# Text Analysis
+
+## Word Cloud
+First I split the description of the shows into words, and then calculated the frequency of the words, removed the invalid words, modified the abnormal words. Draw a word cloud of the description. Place the mouse on any word, the cloud will show its frequency.
+```{r}
+#Break the description into words
+words <- unlist(lapply(X=dt$Description,FUN=segmentCN))
+word=lapply(X=words,FUN=strsplit," ") 
+
+#Calculate the frequency of the words 
+f=table(unlist(word))
+f=data.frame(rev(sort(f)))
+colnames(f) <- c("Word","Freq")
+
+#Remove the words with only one letter 
+f=subset(f,nchar(as.character(f$Word))>1)
+
+#Remove the invalid words (including stop words)
+stopwords <- stopwords("en")
+invalidwords <- append(stopwords,c("The","lives","In","On","This"))
+for(j in 1:length(invalidwords)){
+  f <- subset(f,f$Word!=invalidwords[j])
+  }
+
+#New York City is a location
+f$Word <- as.character(f$Word)
+f[which(f$Word=="New"),1] <- "NY City"
+f <- f[-c(which(f$Word=="York"|f$Word=="City")),]
+
+save(f,file="C:/Users/lenovo/Desktop/615 R/AssignmentsProjects/final/app/f.Rdata")
+
+#Word cloud of description
+wordcloud2(f) 
+```
+
+The words near the center of the cloud — family, friends, life, and group — reveal the popular background settings often used in successful comedy TV shows. 
+
+## Sentiment Analysis
+The `analyzeSentiment` function from `SentimentAnalysis` package can turn a text into a words. The strong function can automatically preprocess text, including dividing words, deleting stop words, finding word roots, etc. Based on four sentiment dictionaries, it analyzes the sentiment of each word in the phrase and sums up the sentiment of the entire text.
+```{r}
+sen <- SentimentAnalysis::analyzeSentiment(dt$Description)
+head(sen)
+```
+
+Use the `get_sentiments` function from `tidytext` package to obtain three emotional dictionaries: `afinn`, `bing`, and `nrc`. The `afinn` dictionary divides the emotion of a word into a value between -5 and 5. The `bing` dictionary divides the emotion of words into two categories, positive and negative. While the `nrc` dictionary divides the emotions of words into ten more specific categories: anger, anticipation, disgust, fear, joy, negative, positive, sadness, surprise and trust.
+```{r}
+#Dictionaries
+afinn <- get_sentiments("afinn")
+left_join(f,afinn,by=c("Word"="word")) %>% 
+  rename(sentiment=value) %>%
+  mutate(method="afinn") -> f1
+f1$sentiment=as.factor(f1$sentiment)
+
+bing <- get_sentiments("bing")
+left_join(f,bing,by=c("Word"="word")) %>% 
+  mutate(method="bing") -> f2
+
+nrc <- get_sentiments("nrc")
+left_join(f,nrc,by=c("Word"="word")) %>% 
+  mutate(method="nrc") -> f3
+
+#Sentiment Visualization 
+bind_rows(f1[1:150,],f2[1:150,],f3[1:150,]) %>%
+  filter(!is.na(sentiment)) %>%
+  ggplot(aes(x=Word,y=sentiment,fill=method)) +
+  geom_col() +
+  theme(axis.text.x=element_text(angle=45,size=9)) +
+  facet_wrap(~method,ncol=1,scales="free_y") -> sen_com
+
+ggsave(sen_com,filename ="C:/Users/lenovo/Desktop/615 R/AssignmentsProjects/final/output/sen_com.png")
+```
+
+The sentiment analysis results obtained by the three dictionaries are plotted on the same graph for comparison. (In order to make the abscissa clear, only the first 150 lines are filtered.) The coverage of the three dictionaries is complementary. At the same time, we can find that the three kinds of results of the words located in the intersection of these dictionaries are relatively similar, but not exactly the same.
+
+# "Young Sheldon" 
+Young Sheldon is a spin-off of The Big Bang Theory. It mainly tells a series of stories about Sheldon living in Texas with his family in his childhood.
+
+## Data Collection and Processing
+I already know the overall rating of each show, which is the average rating of all episodes. What if I want to know the rating of each episode, especially if there are many seasons. In order to do this, I wrote a function to crawl multiple web pages at one time. And then processed the data to prepare for the visualization.
+```{r,warning=FALSE}
+#Define a function to crawl multiple web pages at one time 
+crawl_my_data <- function(url){
+ url %>%
+ read_html() %>%
+ html_nodes('.ipl-rating-star.small .ipl-rating-star__rating') %>%
+ html_text()
+}
+
+#Crawl all the ratings of "Young Sheldon"
+urlist <- c("https://www.imdb.com/title/tt6226232/episodes?season=1", "https://www.imdb.com/title/tt6226232/episodes?season=2", "https://www.imdb.com/title/tt6226232/episodes?season=3", "https://www.imdb.com/title/tt6226232/episodes?season=4")
+map(urlist, crawl_my_data) %>% 
+  unlist() %>% 
+  as.numeric() -> 
+  my_data
+
+#Season & Episode
+season <- rep(c(1:4),c(22,22,21,4))
+episode <- c(c(1:22),c(1:22),c(1:21),c(1:4))
+
+#Integrate the data
+Y <- data.frame(
+  season=season,
+  episode=episode,
+  rating=my_data
+)
+
+save(Y,file="C:/Users/lenovo/Desktop/615 R/AssignmentsProjects/final/app/Y.Rdata")
+
+#Process the data
+Y[-c(which(Y$season==4)),] %>% 
+  arrange(season,episode) %>% 
+  mutate(season=factor(season), 
+         rn=row_number()) %>%  
+  group_by(season) %>%  
+  mutate(avg_rating=mean(rating), 
+         start=min(rn), 
+         end=max(rn),
+         median=median(rn)) %>%  
+  ungroup() ->
+  Y_plot
+
+save(Y_plot,file="C:/Users/lenovo/Desktop/615 R/AssignmentsProjects/final/app/Y_plot.Rdata")
+
+#Connect ratings of different seasons
+df_lines <- Y_plot %>% 
+  group_by(season) %>% 
+  summarise(start = mean(start),
+            end = mean(end),
+            s_avg = unique(avg_rating)) %>% 
+  mutate(lag_rn = lead(start, default = max(end)), 
+         lag_rating = lead(s_avg, default = max(s_avg)))
+
+save(df_lines,file="C:/Users/lenovo/Desktop/615 R/AssignmentsProjects/final/app/df_lines.Rdata")
+```
+
+## Rating Visualization
+```{r,warning=FALSE}
+Y_plot %>% 
+  ggplot(aes(x=rn,y=rating)) +
+  geom_hline(data = tibble(y = 7:10), 
+             aes(yintercept = y),
+             color = '#D3D3D3') +
+  geom_segment(aes(y = avg_rating, 
+                   yend = avg_rating, 
+                   x = start, 
+                   xend = end,
+                   color = season,
+                   color = after_scale(colorspace::darken(color, .1))), 
+               lwd = 2.5) +
+  geom_segment(aes(y = rating, 
+                   yend = avg_rating,
+                   x = rn, 
+                   xend = rn,
+                   color = season,
+                   color = after_scale(colorspace::darken(color, .3)))) +
+  geom_segment(data = df_lines, 
+               aes(x = end, 
+                   xend = lag_rn,
+                   y = s_avg,
+                   yend = lag_rating,
+                   color = season,
+                   color = after_scale(colorspace::darken(color, .3))),
+               lwd = .7) +
+  geom_point(aes(color = season, 
+                 color = after_scale(colorspace::darken(color, .3))),
+             size = 3) +
+  geom_label(aes(label = glue::glue('Season {season}'), 
+                 x = median,
+                 y = 9.3,
+                 color = season,
+                 color = after_scale(colorspace::darken(color, .3))), 
+             label.padding = unit(.3, "lines"),
+             label.r = unit(.25, "lines"),
+             label.size = .8,
+             size = 5) +
+  scale_x_continuous(expand = c(.005, .005)) + 
+  scale_y_continuous(breaks = seq(7, 9.4, by = .5), 
+                     limits = c(7,9.6), 
+                     sec.axis = dup_axis(name = NULL)) + 
+  scale_color_brewer(palette = 'Set3') + 
+  labs(title = '"Young Sheldon" Rating',
+       y = 'IMDb Rating',
+       x = 'Episode') + 
+  guides(color = FALSE) + 
+  theme(plot.title = element_text(size = rel(2), hjust = 0.5),
+        plot.subtitle = element_text(size = rel(1.2), hjust = 0.5)) -> YS_rating
+
+ggsave(YS_rating,filename="C:/Users/lenovo/Desktop/615 R/AssignmentsProjects/final/output/YS_rating.png")
+```
+
+Season 4 is excluded because it only broadcast 4 episodes by the time I did this assignment. The horizontal lines in the plot is the average rating of each season, while the vertical lines represent the distance to the seasons' average rating. As can be seen from the plot, the average rating increases season by season. Therefore, it can be predicted that the popularity of season 4 will be good. The highest rating appeared in the last episode of season 2. In this episode, Sheldon invites the entire school to a party for the Nobel Prize announcements. 
+
+# Discussion
+In the process of completing this assignment, I found some areas that can be improved. They are as follows:
+
+(1) I collected data about the top 50 comedy TV shows, but there is a lot of information I did not use. Although my main focus is the rating, I am wondering how other information could help to understand the rating, in addition to votes and rank.  
+
+(2) I crawled the ratings of all the episodes of "Young Sheldon", which are on the four different web pages, so I wrote a function to get them at one time. I am curios about ways to turn to next page when using web crawlers.
+
+(3) I could do the same thing for all the top 50 comedy TV shows, and find a way to join the 1 plus 50 data sets, but limited by time, I did not. That's the direction that I can continue to work on in the future.
+
+# Biography
+Data Source:
+<div id="refer-anchor-1"></div>
+[1] [Top 50 Comedy TV Shows](https://www.imdb.com/search/title/?genres=comedy&title_type=tv_series,mini_series&explore=genres&pf_rd_m=A2FGELUUNOQJNL&pf_rd_p=b4e1d6fb-9821-4c7d-ad14-31ed10854442&pf_rd_r=K8CC77GSYT0GKXYG31YW&pf_rd_s=center-7&pf_rd_t=15051&pf_rd_i=genre&ref_=ft_gnr_tvpop_5)
+<div id="refer-anchor-1"></div>
+[2] [Young Shouldon Episode List](https://www.imdb.com/title/tt6226232/episodes?season=1&ref_=tt_eps_sn_1)
+
+R Packages:
+```{r eval=FALSE, include=FALSE}
+citation("rvest")
+citation("Rwordseg")
+citation("wordcloud2")
+citation("SentimentAnalysis")
+citation("purrr")
+```
+[3] Hadley Wickham (2020). rvest: Easily Harvest(Scrape) Web Pages. R package version 0.3.6. https://CRAN.R-project.org/package=rvest
+
+[4] Jian Li (2019). Rwordseg: Chinese Word Segmentation. R package version 0.3-2. https://CRAN.R-project.org/package=Rwordseg
+
+[5] Dawei Lang and Guan-tin Chien (2018). wordcloud2: Create Word Cloud by 'htmlwidget'. R package version 0.2.1. https://CRAN.R-project.org/package=wordcloud2
+
+[6] Stefan Feuerriegel and Nicolas Proellochs (2019). SentimentAnalysis: Dictionary-Based Sentiment Analysis. R package version 1.3-3. https://CRAN.R-project.org/package=SentimentAnalysis
+
+[7] Lionel Henry and Hadley Wickham (2020). purrr: Functional Programming Tools. R package version 0.3.4. https://CRAN.R-project.org/package=purrr
+
+Reference:
+
+[8] https://github.com/pltoledo/TidyTuesday
